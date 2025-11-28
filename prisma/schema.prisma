@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              Int       @id @default(autoincrement())
+  firstName       String
+  lastName        String
+  email           String    @unique
+  phoneNumber     String?   @unique
+  profilePhoto    String?   // URL to profile image (Google avatar or uploaded image)
+  gender          String?   // 'male', 'female', 'other' — or make it Enum (optional)
+  dateOfBirth     DateTime? // Optional user DOB
+
+  // Authentication-related fields
+  password        String?   // Nullable for Google users
+  provider        AuthProvider @default(LOCAL) // Tracks login method: LOCAL or GOOGLE
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+enum AuthProvider {
+  LOCAL
+}
+
