@@ -1,6 +1,6 @@
 // src/modules/key-exchange/key-exchange.controller.ts
 
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post } from '@nestjs/common';
 import { KeyExchangeService } from './key-exchange.service';
 import * as keyExchangeTypes from './key-exchange.types';
 
@@ -16,5 +16,10 @@ export class KeyExchangeController {
   @Post('confirm')
   async confirm(@Body() payload: keyExchangeTypes.ConfirmHandshakePayload) {
     return this.keyService.handleConfirmHandshake(payload);
+  }
+
+  @Get('logs')
+  getLogs() {
+    return this.keyService.getLogs();
   }
 }
