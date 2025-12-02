@@ -7,12 +7,7 @@
 ├── 📁 modules/
 │   ├── user/
 │   ├── auth/
-│
-│   ├── crypto/                 # ⬅ Digital signatures, HKDF, DH validation
-│   ├── key-exchange/           # ⬅ Your custom E2EE protocol
-│   ├── messages/               # ⬅ Encrypted messaging (ciphertext only)
-│   ├── files/                  # ⬅ Client-side encrypted file uploads
-│   ├── security/               # ⬅ Replay protection, logs, audits
+│   ├── chat/(chat.gateway.ts, chat.module.ts, chat.service.ts)               
 │
 ├── app.module.ts
 ├── main.ts

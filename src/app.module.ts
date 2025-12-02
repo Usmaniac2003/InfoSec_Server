@@ -11,6 +11,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { KeyExchangeModule } from './modules/key-exchange/key-exchange.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ChatModule } from './modules/chat/chat.module';
     UserModule,
     AuthModule,
     ChatModule,
+    KeyExchangeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
