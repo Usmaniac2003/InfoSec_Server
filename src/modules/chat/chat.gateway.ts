@@ -12,7 +12,6 @@ import {
 import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
 import { ChatService } from './chat.service';
-import * as chatTypes from '../../types/chat/chat.types';
 
 @WebSocketGateway({
   cors: {
@@ -36,20 +35,15 @@ export class ChatGateway
     console.log('🚀 ChatGateway initialized');
   }
 
-  // ---------------------------
-  // SOCKET CONNECTION + AUTH
-  // ---------------------------
   handleConnection(client: Socket): void {
     try {
-      const token = client.handshake.auth?.token as string | undefined;
+      const token = client.handshake.auth?.token;
 
       if (!token) {
-        console.log('❌ No token provided. Disconnecting.');
         client.disconnect();
         return;
       }
 
-      // Validate JWT and cast to proper type
       const decoded = jwt.verify(
         token,
         process.env.JWT_SECRET || 'default_jwt_secret',
@@ -59,7 +53,6 @@ export class ChatGateway
 
       console.log(`✅ User connected: ${decoded.email}`);
     } catch {
-      console.log('❌ Invalid token. Disconnecting client.');
       client.disconnect();
     }
   }
@@ -68,40 +61,42 @@ export class ChatGateway
     console.log('❌ User disconnected');
   }
 
-  // ---------------------------
-  // TEXT MESSAGE
-  // ---------------------------
   @SubscribeMessage('send_message')
   handleMessage(
-    @MessageBody() payload: chatTypes.IncomingMessagePayload,
-    @ConnectedSocket() client: Socket,
-  ): void {
-    const user = client.data.user as { email?: string } | undefined;
-
-    const message = this.chatService.formatMessage({
-      ...payload,
-      sender: payload.sender ?? user?.email ?? 'Unknown',
-      type: 'text',
-    });
-
-    this.server.emit('receive_message', message);
-  }
-
-  // ---------------------------
-  // FILE MESSAGE
-  // ---------------------------
-  @SubscribeMessage('send_file')
-  handleFile(
-    @MessageBody() payload: chatTypes.IncomingMessagePayload,
+    @MessageBody() payload: any,
     @ConnectedSocket() client: Socket,
   ) {
     const user = client.data.user;
 
-    const message = this.chatService.formatMessage({
-      sender: payload.sender ?? user.email,
+    const message = {
+      id: Date.now(),
+      senderId: payload.senderId ?? user?.id,
+      sender: payload.sender ?? user?.email,
+      type: 'text',
+      iv: payload.iv,
+      ciphertext: payload.ciphertext,
+      time: new Date().toLocaleTimeString(),
+    };
+
+    this.server.emit('receive_message', message);
+  }
+
+  @SubscribeMessage('send_file')
+  handleFile(@MessageBody() payload: any, @ConnectedSocket() client: Socket) {
+    const user = client.data.user;
+
+    const message = {
+      id: Date.now(),
+      senderId: payload.senderId ?? user?.id,
+      sender: payload.sender ?? user?.email,
       type: 'file',
-      file: payload.file as chatTypes.FilePayload,
-    });
+      iv: payload.iv,
+      ciphertext: payload.ciphertext,
+      fileName: payload.fileName,
+      mimeType: payload.mimeType,
+      size: payload.size,
+      time: new Date().toLocaleTimeString(),
+    };
 
     this.server.emit('receive_message', message);
   }

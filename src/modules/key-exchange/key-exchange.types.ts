@@ -24,8 +24,12 @@ export interface ConfirmHandshakePayload {
 }
 
 export interface ConfirmHandshakeResponse {
-  status: 'ok';
-  message: string;
+  status: string;
+  message?: string;
+
+  // ⭐ NEW FIELDS for secure group key delivery
+  encryptedGroupKey: string; // base64 AES-GCM encrypted group key
+  groupIv: string; // base64 IV used to encrypt the group key
 }
 
 export interface KeyExchangeLog {

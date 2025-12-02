@@ -1,5 +1,4 @@
 // src/modules/key-exchange/key-exchange.service.ts
-
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import {
@@ -27,13 +26,27 @@ export class KeyExchangeService {
     PendingHandshakeRecord
   >();
 
+  // ⭐ NEW: Shared group key for all clients
+  private groupKey: CryptoKey | null = null;
+  private groupKeyRaw: ArrayBuffer | null = null;
+
   constructor() {
     void this.initServerIdentityKeys();
+    void this.initGroupKey();
   }
 
-  // ----------------------------------------------------------
-  // 1. Generate Server Identity Keys (long-term, ECDSA P-256)
-  // ----------------------------------------------------------
+  private async initGroupKey() {
+    this.groupKey = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+
+    this.groupKeyRaw = await crypto.subtle.exportKey('raw', this.groupKey);
+
+    console.log('🔑 Group key generated');
+  }
+
   private async initServerIdentityKeys() {
     this.serverIdentityKeyPair = await crypto.subtle.generateKey(
       {
@@ -60,9 +73,6 @@ export class KeyExchangeService {
     return this.logs;
   }
 
-  // ----------------------------------------------------------
-  // 2. Verify Replay-Attack Constraints
-  // ----------------------------------------------------------
   private verifyReplayProtection(payload: {
     nonce?: string;
     timestamp?: number;
@@ -71,28 +81,20 @@ export class KeyExchangeService {
     const timestamp = payload.timestamp;
 
     if (!nonce || !timestamp) {
-      this.log('replay_check', 'missing_fields', { nonce, timestamp });
       throw new Error('Missing nonce/timestamp');
     }
 
-    // Reject old timestamps (older than 20 seconds)
     if (Date.now() - timestamp > 20_000) {
-      this.log('replay_check', 'timestamp_expired', { timestamp });
       throw new Error('Stale message - possible replay attack');
     }
 
-    // Reject duplicated nonces
     if (this.replayCache.has(nonce)) {
-      this.log('replay_check', 'duplicate_nonce', { nonce });
       throw new Error('Duplicate nonce - replay detected');
     }
 
     this.replayCache.add(nonce);
   }
 
-  // ----------------------------------------------------------
-  // 3. Import JWK identity public key
-  // ----------------------------------------------------------
   private async importIdentityPublicKey(jwk: JsonWebKey): Promise<CryptoKey> {
     if (jwk.kty === 'EC') {
       return crypto.subtle.importKey(
@@ -117,9 +119,6 @@ export class KeyExchangeService {
     throw new Error('Unsupported JWK type');
   }
 
-  // ----------------------------------------------------------
-  // Helper: Convert Node Buffer → ArrayBuffer
-  // ----------------------------------------------------------
   private bufferToArrayBuffer(buf: Buffer): ArrayBuffer {
     const ab = new ArrayBuffer(buf.length);
     const view = new Uint8Array(ab);
@@ -128,13 +127,9 @@ export class KeyExchangeService {
   }
 
   private arrayBufferToString(buf: ArrayBuffer): string {
-    const view = new Uint8Array(buf);
-    return new TextDecoder().decode(view);
+    return new TextDecoder().decode(new Uint8Array(buf));
   }
 
-  // ----------------------------------------------------------
-  // 4. Verify Client Signature
-  // ----------------------------------------------------------
   private async verifyClientSignature(
     identityKey: CryptoKey,
     clientEphRaw: ArrayBuffer,
@@ -153,16 +148,10 @@ export class KeyExchangeService {
     );
 
     if (!ok) {
-      this.log('signature_verify', 'failed');
       throw new Error('Invalid client signature');
     }
-
-    this.log('signature_verify', 'ok');
   }
 
-  // ----------------------------------------------------------
-  // 5. Generate Server Ephemeral ECDH Keys
-  // ----------------------------------------------------------
   private async generateServerEcdh(): Promise<CryptoKeyPair> {
     return crypto.subtle.generateKey(
       {
@@ -174,10 +163,6 @@ export class KeyExchangeService {
     );
   }
 
-  // ----------------------------------------------------------
-  // 6. Derive Session Key from Shared Secret (HKDF → AES-256-GCM)
-  // NOTE: Make sure frontend uses the same HKDF: static salt + same info.
-  // ----------------------------------------------------------
   private async deriveSessionKey(
     sharedSecret: ArrayBuffer,
   ): Promise<CryptoKey> {
@@ -189,11 +174,10 @@ export class KeyExchangeService {
       ['deriveKey'],
     );
 
-    const encoder = new TextEncoder();
-    const info = encoder.encode('E2EE-Session-Key-Derivation');
-    const salt = new Uint8Array(16); // all zeros (static) – must match frontend
+    const info = new TextEncoder().encode('E2EE-Session-Key-Derivation');
+    const salt = new Uint8Array(16);
 
-    const aesKey = await crypto.subtle.deriveKey(
+    return crypto.subtle.deriveKey(
       {
         name: 'HKDF',
         hash: 'SHA-256',
@@ -201,111 +185,72 @@ export class KeyExchangeService {
         info,
       },
       secretKey,
-      {
-        name: 'AES-GCM',
-        length: 256,
-      },
+      { name: 'AES-GCM', length: 256 },
       false,
       ['encrypt', 'decrypt'],
     );
-
-    return aesKey;
   }
 
-  // ----------------------------------------------------------
-  // 7. Handle Handshake Initiation (/key-exchange/initiate)
-  // ----------------------------------------------------------
   async handleInitiateHandshake(
     payload: ClientHandshakePayload,
   ): Promise<ServerHandshakeResponse> {
-    // 1. Replay protection
     this.verifyReplayProtection(payload);
 
-    const { clientEphemeralKey, clientIdentityKey, signature } = payload;
-
-    // 2. Decode base64 strings → Buffers → ArrayBuffers
-    const ephBuf = Buffer.from(clientEphemeralKey, 'base64');
+    const ephBuf = Buffer.from(payload.clientEphemeralKey, 'base64');
     const clientEphRaw = this.bufferToArrayBuffer(ephBuf);
 
-    const sigBufNode = Buffer.from(signature, 'base64');
-    const sigBuf = this.bufferToArrayBuffer(sigBufNode);
+    const sigBuf = this.bufferToArrayBuffer(
+      Buffer.from(payload.signature, 'base64'),
+    );
 
-    // 3. Import identity public key
-    const identityPubKey =
-      await this.importIdentityPublicKey(clientIdentityKey);
+    const identityPub = await this.importIdentityPublicKey(
+      payload.clientIdentityKey,
+    );
 
-    // 4. Verify the signature
-    await this.verifyClientSignature(identityPubKey, clientEphRaw, sigBuf);
+    await this.verifyClientSignature(identityPub, clientEphRaw, sigBuf);
 
-    // 5. Generate server ephemeral ECDH keypair
     const serverEph = await this.generateServerEcdh();
     const serverEphRaw = await crypto.subtle.exportKey(
       'raw',
       serverEph.publicKey,
     );
 
-    // 6. Sign server ephemeral public key with server identity private key
-    const algo =
+    const serverSig = await crypto.subtle.sign(
       this.serverIdentityKeyPair!.privateKey.algorithm.name === 'ECDSA'
         ? { name: 'ECDSA', hash: 'SHA-256' }
-        : { name: 'RSA-PSS', saltLength: 32 };
-
-    const serverSignature = await crypto.subtle.sign(
-      algo,
+        : { name: 'RSA-PSS', saltLength: 32 },
       this.serverIdentityKeyPair!.privateKey,
       serverEphRaw,
     );
 
-    // 7. Export server identity public key JWK
-    const serverIdentityJwk = await crypto.subtle.exportKey(
-      'jwk',
-      this.serverIdentityKeyPair!.publicKey,
-    );
-
-    // 8. Store pending handshake (for confirm step)
     const handshakeId = randomUUID();
+
     this.pendingHandshakes.set(handshakeId, {
       clientEphRaw,
       serverEphKeyPair: serverEph,
       createdAt: Date.now(),
     });
 
-    this.log('handshake_initiate', 'ok', { handshakeId });
-
     return {
       handshakeId,
       serverEphemeralKey: Buffer.from(serverEphRaw).toString('base64'),
-      serverSignature: Buffer.from(serverSignature).toString('base64'),
-      serverIdentityKey: serverIdentityJwk,
+      serverSignature: Buffer.from(serverSig).toString('base64'),
+      serverIdentityKey: await crypto.subtle.exportKey(
+        'jwk',
+        this.serverIdentityKeyPair!.publicKey,
+      ),
     };
   }
 
-  // ----------------------------------------------------------
-  // 8. Handle Handshake Confirmation (/key-exchange/confirm)
-  // ----------------------------------------------------------
   async handleConfirmHandshake(
     payload: ConfirmHandshakePayload,
   ): Promise<ConfirmHandshakeResponse> {
-    // Replay protection
     this.verifyReplayProtection(payload);
 
-    const { handshakeId, iv, confirmationTag } = payload;
+    const record = this.pendingHandshakes.get(payload.handshakeId);
+    if (!record) throw new Error('Unknown handshakeId');
 
-    const record = this.pendingHandshakes.get(handshakeId);
-    if (!record) {
-      this.log('handshake_confirm', 'missing_record', { handshakeId });
-      throw new Error('Unknown or expired handshakeId');
-    }
-
-    // Optional: expire very old pending handshakes
-    if (Date.now() - record.createdAt > 60_000) {
-      this.pendingHandshakes.delete(handshakeId);
-      this.log('handshake_confirm', 'expired', { handshakeId });
-      throw new Error('Handshake expired');
-    }
-
-    // Import client ephemeral public key for ECDH
-    const clientEphKey = await crypto.subtle.importKey(
+    const clientPubKey = await crypto.subtle.importKey(
       'raw',
       record.clientEphRaw,
       { name: 'ECDH', namedCurve: 'P-256' },
@@ -313,55 +258,45 @@ export class KeyExchangeService {
       [],
     );
 
-    // Derive shared secret
     const sharedSecret = await crypto.subtle.deriveBits(
-      {
-        name: 'ECDH',
-        public: clientEphKey,
-      },
+      { name: 'ECDH', public: clientPubKey },
       record.serverEphKeyPair.privateKey,
       256,
     );
 
-    // Derive AES-256-GCM session key (HKDF)
     const sessionKey = await this.deriveSessionKey(sharedSecret);
 
-    // Decode IV & ciphertext
-    const ivBuf = Buffer.from(iv, 'base64');
-    const ivBytes = new Uint8Array(ivBuf);
+    const iv = new Uint8Array(Buffer.from(payload.iv, 'base64'));
+    const ciphertext = Buffer.from(payload.confirmationTag, 'base64');
 
-    const tagBufNode = Buffer.from(confirmationTag, 'base64');
-    const tagBuf = this.bufferToArrayBuffer(tagBufNode);
-
-    // Decrypt confirmation
-    let plaintext: ArrayBuffer;
+    let decrypted;
     try {
-      plaintext = await crypto.subtle.decrypt(
-        {
-          name: 'AES-GCM',
-          iv: ivBytes,
-        },
+      decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv },
         sessionKey,
-        tagBuf,
+        ciphertext,
       );
-    } catch (err) {
-      this.log('handshake_confirm', 'decrypt_failed', { handshakeId });
-      throw new Error('Failed to decrypt confirmation tag');
+    } catch {
+      throw new Error('Failed to decrypt confirmation');
     }
 
-    const text = this.arrayBufferToString(plaintext);
-    if (text !== 'KEY_CONFIRM') {
-      this.log('handshake_confirm', 'invalid_payload', { handshakeId, text });
-      throw new Error('Invalid confirmation payload');
-    }
+    const text = this.arrayBufferToString(decrypted);
 
-    // Success: remove from pending, log ok
-    this.pendingHandshakes.delete(handshakeId);
-    this.log('handshake_confirm', 'ok', { handshakeId });
+    if (text !== 'KEY_CONFIRM') throw new Error('Invalid confirm payload');
+
+    // ⭐ Encrypt groupKey for this user
+    const groupIv = crypto.getRandomValues(new Uint8Array(12));
+
+    const encryptedGroupKey = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: groupIv },
+      sessionKey,
+      this.groupKeyRaw!,
+    );
 
     return {
       status: 'ok',
-      message: 'Key confirmation successful',
+      encryptedGroupKey: Buffer.from(encryptedGroupKey).toString('base64'),
+      groupIv: Buffer.from(groupIv).toString('base64'),
     };
   }
 }
