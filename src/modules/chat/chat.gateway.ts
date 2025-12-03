@@ -51,7 +51,9 @@ export class ChatGateway
 
       client.data.user = decoded;
 
+      console.log(`\n==============================`);
       console.log(`✅ User connected: ${decoded.email}`);
+      console.log(`==============================\n`);
     } catch {
       client.disconnect();
     }
@@ -61,29 +63,81 @@ export class ChatGateway
     console.log('❌ User disconnected');
   }
 
+  // -------------------------------------------------------------------
+  // 🔹 HELPER LOGGER (prints encrypted vs plaintext message)
+  // -------------------------------------------------------------------
+  private logIncomingMessage(type: string, sender: any, payload: any) {
+    const isEncrypted = payload.iv && payload.ciphertext;
+
+    console.log(`\n----- 📩 Incoming ${type.toUpperCase()} Message -----`);
+    console.log(
+      `👤 Sender: ${sender?.email ?? sender?.firstName ?? 'Unknown'}`,
+    );
+    console.log(
+      `🔐 Encryption: ${isEncrypted ? 'ENCRYPTED' : 'PLAINTEXT (MITM vulnerable)'}`,
+    );
+
+    if (isEncrypted) {
+      console.log(`🔑 IV (base64): ${payload.iv}`);
+      console.log(`🧩 Ciphertext length: ${payload.ciphertext.length}`);
+      console.log(
+        `📦 Ciphertext (preview): ${payload.ciphertext.substring(0, 40)}...`,
+      );
+    } else {
+      console.log(
+        `📝 Plaintext message: ${payload.text ?? '[NO TEXT FIELD PROVIDED]'}`,
+      );
+    }
+
+    if (type === 'file') {
+      console.log(`📁 File Name: ${payload.fileName}`);
+      console.log(`📦 Mime Type: ${payload.mimeType}`);
+      console.log(`📏 Size: ${payload.size} bytes`);
+    }
+
+    console.log(`----------------------------------------\n`);
+  }
+
+  // -------------------------------------------------------------------
+  // TEXT MESSAGE
+  // -------------------------------------------------------------------
   @SubscribeMessage('send_message')
   handleMessage(
     @MessageBody() payload: any,
     @ConnectedSocket() client: Socket,
   ) {
     const user = client.data.user;
+    const MITM = true;
+    // 🔹 LOG HERE
+    this.logIncomingMessage('text', user, payload);
 
     const message = {
       id: Date.now(),
       senderId: payload.senderId ?? user?.id,
       sender: payload.sender ?? user?.email,
       type: 'text',
-      iv: payload.iv,
-      ciphertext: payload.ciphertext,
+
+      // 🔥 If encrypted → forward iv + ciphertext
+      // 🔥 If plaintext → forward text
+      iv: MITM ? payload.iv : null,
+      ciphertext: MITM ? payload.ciphertext : null,
+      text: !MITM ? payload.text : null,
+
       time: new Date().toLocaleTimeString(),
     };
 
     this.server.emit('receive_message', message);
   }
 
+  // -------------------------------------------------------------------
+  // FILE MESSAGE
+  // -------------------------------------------------------------------
   @SubscribeMessage('send_file')
   handleFile(@MessageBody() payload: any, @ConnectedSocket() client: Socket) {
     const user = client.data.user;
+
+    // 🔹 LOG HERE
+    this.logIncomingMessage('file', user, payload);
 
     const message = {
       id: Date.now(),

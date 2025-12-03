@@ -8,6 +8,11 @@ import * as keyExchangeTypes from './key-exchange.types';
 export class KeyExchangeController {
   constructor(private readonly keyService: KeyExchangeService) {}
 
+  @Post('vulnerable-initiate')
+  async vulnerableInit(@Body() payload: any) {
+    return this.keyService.vulnerableHandshake(payload);
+  }
+
   @Post('initiate')
   async initiate(@Body() payload: keyExchangeTypes.ClientHandshakePayload) {
     return this.keyService.handleInitiateHandshake(payload);

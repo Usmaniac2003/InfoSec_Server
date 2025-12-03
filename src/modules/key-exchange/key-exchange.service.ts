@@ -355,7 +355,9 @@ export class KeyExchangeService {
         ciphertext,
       );
     } catch (err) {
-      this.log('confirmation_decrypt', 'failed', { handshakeId: payload.handshakeId });
+      this.log('confirmation_decrypt', 'failed', {
+        handshakeId: payload.handshakeId,
+      });
       throw new Error('Failed to decrypt confirmation');
     }
 
@@ -369,7 +371,9 @@ export class KeyExchangeService {
       throw new Error('Invalid confirm payload');
     }
 
-    this.log('confirmation_decrypt', 'ok', { handshakeId: payload.handshakeId });
+    this.log('confirmation_decrypt', 'ok', {
+      handshakeId: payload.handshakeId,
+    });
 
     // Encrypt groupKey for this user
     const groupIv = crypto.getRandomValues(new Uint8Array(12));
@@ -390,6 +394,31 @@ export class KeyExchangeService {
       status: 'ok',
       encryptedGroupKey: Buffer.from(encryptedGroupKey).toString('base64'),
       groupIv: Buffer.from(groupIv).toString('base64'),
+    };
+  }
+
+  // ----------------------------------------------------------
+  // Vulnerable Key Exchange
+  // ----------------------------------------------------------
+
+  async vulnerableHandshake(payload: any) {
+    const clientPubRaw = Buffer.from(payload.clientEphemeralKey, 'base64');
+
+    // Generate server DH ephemerals
+    const serverEph = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits'],
+    );
+
+    const serverPubRaw = await crypto.subtle.exportKey(
+      'raw',
+      serverEph.publicKey,
+    );
+
+    return {
+      serverEphemeralKey: Buffer.from(serverPubRaw).toString('base64'),
+      note: 'VULNERABLE DH: UNSIGNED, UNAUTHENTICATED, MITM POSSIBLE',
     };
   }
 }
